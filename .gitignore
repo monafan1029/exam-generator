@@ -1,0 +1,25 @@
+cat > .gitignore << 'EOF'
+# 环境配置（含数据库密码，不能上传）
+.env
+
+# Python虚拟环境
+venv/
+__pycache__/
+*.pyc
+
+# 教材文件（有版权，不能上传）
+*.pdf
+*.docx
+*.doc
+uploads/
+
+# Node依赖
+node_modules/
+
+# 生成的PDF试卷
+outputs/
+*.pdf
+
+# 系统文件
+.DS_Store
+EOF
