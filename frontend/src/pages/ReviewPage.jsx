@@ -20,7 +20,7 @@ const TYPE_LABELS = {
 const TYPE_ORDER = ["single_select", "multi_select", "short_answer"];
 const DEFAULT_SCORES = { single_select: 4, multi_select: 6, short_answer: 10 };
 
-export default function ReviewPage() {
+export default function ReviewPage({ active }) {
   const [documents, setDocuments] = useState([]);
   const [docId, setDocId] = useState(null);
   const [questions, setQuestions] = useState([]);
@@ -31,13 +31,20 @@ export default function ReviewPage() {
   const [selected, setSelected] = useState({}); // {questionId: score}
   const [examTitle, setExamTitle] = useState("题库组卷");
   const [creating, setCreating] = useState(false);
+  const [createdExam, setCreatedExam] = useState(null); // {id, title}
 
+  // tab激活时刷新教材列表；已选教材仍存在时保留选择
   useEffect(() => {
+    if (!active) return;
     listDocuments().then((res) => {
       setDocuments(res.data);
-      if (res.data.length > 0) setDocId(res.data[0].id);
+      setDocId((prev) =>
+        prev && res.data.some((d) => d.id === prev)
+          ? prev
+          : res.data.length > 0 ? res.data[0].id : null
+      );
     });
-  }, []);
+  }, [active]);
 
   const refresh = useCallback(() => {
     if (!docId) return;
@@ -48,8 +55,8 @@ export default function ReviewPage() {
   }, [docId]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (active) refresh();
+  }, [active, refresh]);
 
   const toggleSelect = (q) => {
     setSelected((prev) => {
@@ -85,7 +92,7 @@ export default function ReviewPage() {
         })),
       };
       const res = await createManualExam(payload);
-      alert(`试卷已生成！（paper_id=${res.data.paper_id}）`);
+      setCreatedExam({ id: res.data.paper_id, title: examTitle });
       setSelected({});
       refresh();
     } catch {
@@ -149,6 +156,33 @@ export default function ReviewPage() {
         </select>
         <span style={s.count}>题库共 {questions.length} 道</span>
       </div>
+
+      {createdExam && (
+        <div style={s.successBanner}>
+          <span>
+            试卷《{createdExam.title}》已生成（ID: {createdExam.id}）
+          </span>
+          <a
+            href={`http://localhost:8000/api/exams/${createdExam.id}/pdf/exam`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ ...s.btn, textDecoration: "none" }}
+          >
+            下载题目版PDF
+          </a>
+          <a
+            href={`http://localhost:8000/api/exams/${createdExam.id}/pdf/answer`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ ...s.btn, textDecoration: "none" }}
+          >
+            下载答案版PDF
+          </a>
+          <button style={s.btn} onClick={() => setCreatedExam(null)}>
+            关闭
+          </button>
+        </div>
+      )}
 
       {/* 组卷浮动面板 */}
       {selectedCount > 0 && (
@@ -387,6 +421,12 @@ const s = {
     border: "1px solid #d1d5db", borderRadius: 6, width: 200,
   },
   examPanelInfo: { fontSize: 14, fontWeight: "bold" },
+  successBanner: {
+    display: "flex", gap: 12, alignItems: "center",
+    padding: 12, background: "#f0fdf4",
+    border: "1px solid #16a34a", borderRadius: 8, marginBottom: 16,
+    fontSize: 14,
+  },
   sectionTitle: {
     borderLeft: "4px solid #2563eb", paddingLeft: 10, marginTop: 24,
   },

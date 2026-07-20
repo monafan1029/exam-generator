@@ -2,7 +2,7 @@
  * 教材管理页
  * 上传面板 + 教材列表 + 知识点树展示
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import UploadPanel from "../components/UploadPanel";
 import { listDocuments, getKnowledgePoints, deleteDocument } from "../api/client";
 
@@ -15,23 +15,27 @@ const STATUS_LABELS = {
   failed: "✗ 失败",
 };
 
-export default function DocumentsPage() {
+export default function DocumentsPage({ active }) {
   const [documents, setDocuments] = useState([]);
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [knowledgePoints, setKnowledgePoints] = useState([]);
 
-  const refreshDocuments = async () => {
+  const refreshDocuments = useCallback(async () => {
     try {
       const res = await listDocuments();
       setDocuments(res.data);
     } catch (err) {
       console.error("获取教材列表失败", err);
     }
-  };
-
-  useEffect(() => {
-    refreshDocuments();
   }, []);
+
+  // tab激活时刷新；激活期间轮询，让"解析中→就绪"状态自动更新
+  useEffect(() => {
+    if (!active) return;
+    refreshDocuments();
+    const timer = setInterval(refreshDocuments, 5000);
+    return () => clearInterval(timer);
+  }, [active, refreshDocuments]);
 
   const handleSelectDoc = async (doc) => {
     setSelectedDoc(doc);

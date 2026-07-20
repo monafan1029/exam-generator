@@ -79,3 +79,6 @@ export const approveExam = (paperId) =>
 
 export const createManualExam = (payload) =>
   client.post("/api/exams/create-manual", payload);
+
+export const deleteExam = (paperId) =>
+  client.delete(`/api/exams/${paperId}`);

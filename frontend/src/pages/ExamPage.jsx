@@ -20,7 +20,7 @@ const TYPE_LABELS = {
   short_answer: "简答题",
 };
 
-export default function ExamPage() {
+export default function ExamPage({ active }) {
   // 阶段：config（配置） / generating（出题中） / review（审核）
   const [view, setView] = useState("config");
 
@@ -46,13 +46,19 @@ export default function ExamPage() {
   const [editForm, setEditForm] = useState({});
   const [replacingId, setReplacingId] = useState(null);
 
+  // tab激活时刷新教材列表；已选教材仍存在时保留选择
   useEffect(() => {
+    if (!active) return;
     listDocuments().then((res) => {
       const ready = res.data.filter((d) => d.status === "ready");
       setDocuments(ready);
-      if (ready.length > 0) setDocId(ready[0].id);
+      setDocId((prev) =>
+        prev && ready.some((d) => d.id === prev)
+          ? prev
+          : ready.length > 0 ? ready[0].id : null
+      );
     });
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (!docId) return;

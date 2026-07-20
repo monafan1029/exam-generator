@@ -32,8 +32,9 @@ def load_knowledge_points(document_id: int) -> list:
 def detect_current_chapter(line: str) -> str | None:
     """检测这一行是否是章标题，是则返回标题文字"""
     clean = line.strip()
-    if re.match(r'^第\s*\d+\s*章', clean) or \
-       re.match(r'^第\s*[一二三四五六七八九十]+\s*章', clean):
+    if re.match(r'^第\s*\d+\s*[章讲]', clean) or \
+       re.match(r'^第\s*[一二三四五六七八九十]+\s*[章讲]', clean) or \
+       re.match(r'^(Chapter|Lecture)\s+\d+', clean, re.IGNORECASE):
         return clean
     return None
 
@@ -106,6 +107,16 @@ def chunk_and_label(text: str, document_id: int,
     kp_options = "\n".join(f"  {kp['code']}: {kp['name']}"
                            for kp in kp_list)
 
+    # 无章节结构的文档（如单篇lecture，只有一个根节点）：
+    # AI打标签失败时归到根节点，保证内容不会因无标签而无法参与出题
+    with get_db() as (conn, cur):
+        cur.execute("""
+            SELECT id FROM knowledge_points
+            WHERE document_id = %s AND level = 1
+        """, (document_id,))
+        roots = cur.fetchall()
+    fallback_kp_id = roots[0][0] if len(roots) == 1 else None
+
     # 清理该文档的旧chunks
     with get_db() as (conn, cur):
         cur.execute("DELETE FROM knowledge_chunks WHERE document_id = %s",
@@ -158,6 +169,8 @@ def chunk_and_label(text: str, document_id: int,
                 kp_id = match_kp_by_section(current_section, current_chapter, kp_list)
                 if kp_id is None:
                     kp_id = label_chunk(chunk_text, kp_list, kp_options)
+                if kp_id is None:
+                    kp_id = fallback_kp_id
                 if kp_id:
                     labeled += 1
                 else:
@@ -183,7 +196,9 @@ def chunk_and_label(text: str, document_id: int,
         chunk_order += 1
         kp_id = match_kp_by_section(current_section, current_chapter, kp_list)
         if kp_id is None:
-            kp_id = label_chunk(chunk_text, kp_list, kp_options)
+            kp_id = label_chunk(buffer.strip(), kp_list, kp_options)
+        if kp_id is None:
+            kp_id = fallback_kp_id
         if kp_id:
             labeled += 1
         else:

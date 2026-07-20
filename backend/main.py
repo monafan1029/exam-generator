@@ -474,6 +474,20 @@ def get_exam(paper_id: int):
     }
 
 
+@app.delete("/api/exams/{paper_id}")
+def delete_exam(paper_id: int):
+    """删除试卷（题库中的题目本身不受影响，仅移除该试卷及其题目关联）"""
+    with get_db() as (conn, cur):
+        cur.execute("SELECT id FROM exam_papers WHERE id = %s", (paper_id,))
+        if not cur.fetchone():
+            raise HTTPException(404, "试卷不存在")
+        cur.execute("DELETE FROM review_logs WHERE paper_id = %s", (paper_id,))
+        cur.execute("DELETE FROM exam_paper_questions WHERE paper_id = %s",
+                    (paper_id,))
+        cur.execute("DELETE FROM exam_papers WHERE id = %s", (paper_id,))
+    return {"message": "已删除"}
+
+
 @app.post("/api/exams/{paper_id}/replace/{question_id}")
 def replace_question(paper_id: int, question_id: int):
     """换题：废弃当前题，重新生成一道补上"""

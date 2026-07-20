@@ -2,12 +2,14 @@ import { useState } from "react";
 import DocumentsPage from "./pages/DocumentsPage";
 import ReviewPage from "./pages/ReviewPage";
 import ExamPage from "./pages/ExamPage";
+import HistoryPage from "./pages/HistoryPage";
 
 
 const TABS = [
-  { key: "documents", label: "教材管理", component: <DocumentsPage /> },
-  { key: "exam", label: "组卷", component: <ExamPage /> },
-  { key: "review", label: "题库管理", component: <ReviewPage /> },
+  { key: "documents", label: "教材管理", Component: DocumentsPage },
+  { key: "exam", label: "组卷", Component: ExamPage },
+  { key: "review", label: "题库管理", Component: ReviewPage },
+  { key: "history", label: "历史试卷", Component: HistoryPage },
 ];
 
 function App() {
@@ -29,7 +31,11 @@ function App() {
           </button>
         ))}
       </nav>
-      {TABS.find((t) => t.key === tab)?.component}
+      {TABS.map(({ key, Component }) => (
+        <div key={key} style={{ display: tab === key ? "block" : "none" }}>
+          <Component active={tab === key} />
+        </div>
+      ))}
     </div>
   );
 }

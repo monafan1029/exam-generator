@@ -25,9 +25,10 @@ def extract_titles_by_rule(text: str) -> list[dict]:
         if not clean or len(clean) > 80:
             continue
 
-        # 章标题：第X章 或 第一章
-        if re.match(r'^第\s*\d+\s*章', clean) or \
-           re.match(r'^第\s*[一二三四五六七八九十]+\s*章', clean):
+        # 章标题：第X章 / 第一章 / 第X讲 / Chapter N / Lecture N
+        if re.match(r'^第\s*\d+\s*[章讲]', clean) or \
+           re.match(r'^第\s*[一二三四五六七八九十]+\s*[章讲]', clean) or \
+           re.match(r'^(Chapter|Lecture)\s+\d+', clean, re.IGNORECASE):
             current_chapter = {"chapter": clean, "sections": []}
             chapters.append(current_chapter)
 
@@ -38,6 +39,58 @@ def extract_titles_by_rule(text: str) -> list[dict]:
             current_chapter["sections"].append(clean)
 
     return chapters
+
+
+def extract_topics_by_ai(text: str, filename: str) -> list[dict]:
+    """
+    无章节结构的文档（如单篇lecture）：用AI从内容中提取主题和核心知识点。
+    返回与 extract_titles_by_rule 相同的结构，整篇文档作为一个"章"。
+    AI失败时用通用主题兜底，保证流程不中断。
+    """
+    stem = filename.rsplit(".", 1)[0]
+
+    # 采样开头+中间+结尾，控制prompt长度
+    sample = text[:2000]
+    if len(text) > 6000:
+        mid = len(text) // 2
+        sample += "\n...\n" + text[mid:mid + 1500] \
+                + "\n...\n" + text[-1000:]
+
+    prompt = f"""以下是一篇讲义/文档的内容节选。提取它的主题和5-10个核心知识点（用于出题）。
+知识点名称使用与原文相同的语言，具体到概念/方法级别。只输出JSON。
+
+内容节选：
+{sample}
+
+输出格式：
+{{
+  "title": "文档主题",
+  "topics": ["知识点1", "知识点2"]
+}}"""
+
+    title, topics = stem, []
+    try:
+        response = ollama.chat(
+            model=OLLAMA_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            format="json",
+            options={"temperature": 0.2, "num_predict": 600}
+        )
+        content = response["message"]["content"]
+        content = content.replace("```json", "").replace("```", "").strip()
+        result = json.loads(content)
+        title = (result.get("title") or stem).strip()[:80]
+        topics = [
+            t.strip()[:80] for t in result.get("topics", [])
+            if isinstance(t, str) and t.strip()
+        ][:15]
+    except Exception:
+        pass
+
+    if not topics:
+        topics = ["核心概念", "方法与原理", "应用与实例"]
+
+    return [{"chapter": title, "sections": topics}]
 
 
 def ai_process_chapter(chapter_data: dict, index: int) -> dict:
@@ -127,10 +180,10 @@ def extract_and_save(text: str, filename: str, file_path: str) -> dict:
     """
     file_type = filename.rsplit(".", 1)[-1].lower()
 
-    # 规则提取章节
+    # 规则提取章节；没有章节结构（如单篇lecture）时用AI从内容提取主题
     chapters = extract_titles_by_rule(text)
     if not chapters:
-        raise ValueError("未能识别到任何章节标题，请检查教材格式")
+        chapters = extract_topics_by_ai(text, filename)
 
     # AI识别学科
     subject_info = get_subject_name(text)
