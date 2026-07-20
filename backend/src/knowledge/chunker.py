@@ -64,6 +64,7 @@ def label_chunk(text: str, kp_list: list, kp_options: str) -> int | None:
         response = ollama.chat(
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
+            think=False,
             options={"temperature": 0.1, "num_predict": 15}
         )
         code = re.sub(r'[^A-Z0-9\-]', '',
@@ -75,22 +76,83 @@ def label_chunk(text: str, kp_list: list, kp_options: str) -> int | None:
         pass
     return None
 
+_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _cn_to_int(s: str) -> int | None:
+    """中文数字转整数（支持一~九十九）"""
+    if s in _CN_NUM:
+        return _CN_NUM[s]
+    if s.startswith("十"):
+        return 10 + _CN_NUM.get(s[1:], 0)
+    if s.endswith("十"):
+        return _CN_NUM[s[0]] * 10
+    if "十" in s:
+        a, b = s.split("十", 1)
+        return _CN_NUM.get(a, 0) * 10 + _CN_NUM.get(b, 0)
+    return None
+
+
+def _section_num(s: str) -> str | None:
+    """提取小节编号前缀，如 '1.1    大语言模型的特点' -> '1.1'"""
+    m = re.match(r'^(\d+\.\d+)(?!\.\d)', s.strip())
+    return m.group(1) if m else None
+
+
+def _chapter_num(s: str) -> str | None:
+    """提取章编号，如 '第 1 章 概述' / '第一章' / 'Chapter 3' -> '1'/'1'/'3'"""
+    clean = s.strip()
+    m = re.match(r'^第\s*(\d+)\s*[章讲]', clean)
+    if m:
+        return m.group(1)
+    m = re.match(r'^(?:Chapter|Lecture)\s+(\d+)', clean, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.match(r'^第\s*([一二三四五六七八九十]+)\s*[章讲]', clean)
+    if m:
+        n = _cn_to_int(m.group(1))
+        return str(n) if n else None
+    return None
+
+
+def _squash(s: str) -> str:
+    """去掉所有空白字符，用于名称对照（PDF提取的空格数经常不一致）"""
+    return re.sub(r'\s+', '', s)
+
+
 def match_kp_by_section(current_section: str,
                         current_chapter: str,
                         kp_list: list) -> int | None:
-    """用当前章节位置直接匹配知识点,不调用AI"""
-    # 优先匹配小节名
+    """
+    用当前章节位置直接匹配知识点，不调用AI。
+    优先编号前缀匹配（对空格差异免疫），再退到去空白后的名称包含匹配。
+    """
+    # 1. 小节编号匹配："1.1 xxx" 只看 "1.1"
     if current_section:
+        sec_num = _section_num(current_section)
+        if sec_num:
+            for kp in kp_list:
+                if _section_num(kp["name"]) == sec_num:
+                    return kp["id"]
+        # 编号提不出来（如AI生成的主题名），退到去空白名称匹配
+        sec_sq = _squash(current_section)
         for kp in kp_list:
-            # 小节标题形如"6.1 大语言模型的毒性与偏见"
-            # 知识点名形如"大语言模型的毒性与偏见"
-            if kp["name"] in current_section or \
-               current_section.endswith(kp["name"]):
+            kp_sq = _squash(kp["name"])
+            if kp_sq and (kp_sq in sec_sq or sec_sq.endswith(kp_sq)):
                 return kp["id"]
-    # 小节没匹配上,退而匹配章名
+
+    # 2. 章编号匹配："第 1 章" / "第一章" / "Chapter 1" 都归一到 "1"
     if current_chapter:
+        ch_num = _chapter_num(current_chapter)
+        if ch_num:
+            for kp in kp_list:
+                if _chapter_num(kp["name"]) == ch_num:
+                    return kp["id"]
+        ch_sq = _squash(current_chapter)
         for kp in kp_list:
-            if kp["name"] in current_chapter:
+            kp_sq = _squash(kp["name"])
+            if kp_sq and kp_sq in ch_sq:
                 return kp["id"]
     return None
 

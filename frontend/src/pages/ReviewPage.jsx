@@ -11,6 +11,7 @@ import {
   updateQuestionContent,
   createManualExam,
 } from "../api/client";
+import MathText from "../components/MathText";
 
 const TYPE_LABELS = {
   single_select: "单选题",
@@ -365,11 +366,11 @@ export default function ReviewPage({ active }) {
                   </div>
                 ) : (
                   <>
-                    <div style={s.qText}>{q.content.question}</div>
+                    <div style={s.qText}><MathText>{q.content.question}</MathText></div>
                     {q.content.options && (
                       <div style={s.options}>
                         {Object.entries(q.content.options).map(([k, v]) => (
-                          <div key={k}>{k}. {v}</div>
+                          <div key={k}>{k}. <MathText>{v}</MathText></div>
                         ))}
                       </div>
                     )}

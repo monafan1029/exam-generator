@@ -14,6 +14,13 @@ const TABS = [
 
 function App() {
   const [tab, setTab] = useState("documents");
+  // 历史页"继续出题/继续审核"时传给组卷页的目标试卷 {paperId, taskId?}
+  const [openPaper, setOpenPaper] = useState(null);
+
+  const handleOpenPaper = (paperId, taskId) => {
+    setOpenPaper({ paperId, taskId });
+    setTab("exam");
+  };
 
   return (
     <div>
@@ -33,7 +40,13 @@ function App() {
       </nav>
       {TABS.map(({ key, Component }) => (
         <div key={key} style={{ display: tab === key ? "block" : "none" }}>
-          <Component active={tab === key} />
+          <Component
+            active={tab === key}
+            {...(key === "exam"
+              ? { openPaper, onOpenHandled: () => setOpenPaper(null) }
+              : {})}
+            {...(key === "history" ? { onOpenPaper: handleOpenPaper } : {})}
+          />
         </div>
       ))}
     </div>

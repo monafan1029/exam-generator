@@ -71,8 +71,10 @@ export const listExams = (documentId) =>
 export const getExam = (paperId) =>
   client.get(`/api/exams/${paperId}`);
 
-export const replaceQuestion = (paperId, questionId) =>
-  client.post(`/api/exams/${paperId}/replace/${questionId}`);
+export const replaceQuestion = (paperId, questionId, newKpId) =>
+  client.post(`/api/exams/${paperId}/replace/${questionId}`, null, {
+    params: newKpId ? { new_kp_id: newKpId } : {},
+  });
 
 export const approveExam = (paperId) =>
   client.post(`/api/exams/${paperId}/approve`);
@@ -82,3 +84,6 @@ export const createManualExam = (payload) =>
 
 export const deleteExam = (paperId) =>
   client.delete(`/api/exams/${paperId}`);
+
+export const resumeExam = (paperId) =>
+  client.post(`/api/exams/${paperId}/resume`);

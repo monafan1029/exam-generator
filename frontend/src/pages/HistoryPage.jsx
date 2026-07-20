@@ -3,7 +3,7 @@
  * 列出所有已生成的试卷，支持按教材筛选、重新下载PDF、删除试卷
  */
 import { useState, useEffect, useCallback } from "react";
-import { listDocuments, listExams, deleteExam } from "../api/client";
+import { listDocuments, listExams, deleteExam, resumeExam } from "../api/client";
 
 const STATUS_LABELS = {
   generating: "出题中",
@@ -11,11 +11,12 @@ const STATUS_LABELS = {
   approved: "已成卷",
 };
 
-export default function HistoryPage({ active }) {
+export default function HistoryPage({ active, onOpenPaper }) {
   const [documents, setDocuments] = useState([]);
   const [docId, setDocId] = useState(null); // null = 全部教材
   const [exams, setExams] = useState([]);
   const [deletingId, setDeletingId] = useState(null);
+  const [resumingId, setResumingId] = useState(null);
 
   useEffect(() => {
     if (!active) return;
@@ -29,6 +30,17 @@ export default function HistoryPage({ active }) {
   useEffect(() => {
     if (active) refresh();
   }, [active, refresh]);
+
+  const handleResume = async (paperId) => {
+    setResumingId(paperId);
+    try {
+      const res = await resumeExam(paperId);
+      onOpenPaper(paperId, res.data.task_id);
+    } catch (err) {
+      alert(err.response?.data?.detail || "继续出题失败，请重试");
+    }
+    setResumingId(null);
+  };
 
   const handleDelete = async (paperId, title) => {
     if (!window.confirm(`确定删除试卷《${title}》？（题库中的题目不受影响）`))
@@ -106,8 +118,21 @@ export default function HistoryPage({ active }) {
                       下载答案版PDF
                     </a>
                   </>
+                ) : exam.status === "generating" ? (
+                  <button
+                    style={s.btnPrimary}
+                    onClick={() => handleResume(exam.id)}
+                    disabled={resumingId === exam.id}
+                  >
+                    {resumingId === exam.id ? "启动中..." : "继续出题"}
+                  </button>
                 ) : (
-                  <span style={s.hint}>未成卷，暂不可下载</span>
+                  <button
+                    style={s.btnPrimary}
+                    onClick={() => onOpenPaper(exam.id, null)}
+                  >
+                    继续审核
+                  </button>
                 )}
                 <button
                   style={s.btnDanger}
@@ -154,5 +179,10 @@ const s = {
     padding: "6px 14px", borderRadius: 6, fontSize: 13,
     border: "1px solid #dc2626", color: "#dc2626",
     background: "#fff", cursor: "pointer",
+  },
+  btnPrimary: {
+    padding: "6px 14px", borderRadius: 6, fontSize: 13,
+    border: "none", background: "#2563eb", color: "#fff",
+    cursor: "pointer",
   },
 };
