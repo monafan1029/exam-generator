@@ -13,6 +13,8 @@ import {
   approveExam,
   updateQuestionContent,
 } from "../api/client";
+import MathText from "../components/MathText";
+import ChapterChart from "../components/ChapterChart";
 
 const TYPE_LABELS = {
   single_select: "单选题",
@@ -20,7 +22,7 @@ const TYPE_LABELS = {
   short_answer: "简答题",
 };
 
-export default function ExamPage({ active }) {
+export default function ExamPage({ active, openPaper, onOpenHandled }) {
   // 阶段：config（配置） / generating（出题中） / review（审核）
   const [view, setView] = useState("config");
 
@@ -45,6 +47,31 @@ export default function ExamPage({ active }) {
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [replacingId, setReplacingId] = useState(null);
+  // 换题选章节：{qid, kpId}，kpId为null表示沿用原知识点
+  const [replacePick, setReplacePick] = useState(null);
+  // 试卷所属教材的完整知识点树（画章节分布、供换题选择）
+  const [fullKps, setFullKps] = useState([]);
+
+  useEffect(() => {
+    if (!exam?.document_id) return;
+    getKnowledgePoints(exam.document_id).then((res) => setFullKps(res.data));
+  }, [exam?.document_id]);
+
+  // 章节分布：题目的kp归属到其父章节（lecture根节点题目归自身）
+  const chapterDist = (() => {
+    if (!exam || !fullKps.length) return [];
+    const byId = Object.fromEntries(fullKps.map((k) => [k.id, k]));
+    const chapters = fullKps.filter((k) => k.level === 1);
+    const counts = {};
+    for (const q of exam.questions) {
+      const kp = byId[q.kp_id];
+      const chId = kp ? (kp.level === 1 ? kp.id : kp.parent_id) : null;
+      if (chId) counts[chId] = (counts[chId] || 0) + 1;
+    }
+    return chapters.map((ch) => ({
+      id: ch.id, name: ch.name, count: counts[ch.id] || 0,
+    }));
+  })();
 
   // tab激活时刷新教材列表；已选教材仍存在时保留选择
   useEffect(() => {
@@ -88,6 +115,37 @@ export default function ExamPage({ active }) {
     );
   };
 
+  const startPolling = (taskId) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const p = await getTaskProgress(taskId);
+        setProgress(p.data);
+        if (p.data.paper_id) {
+          const ex = await getExam(p.data.paper_id);
+          setExam(ex.data);
+        }
+        if (p.data.stage === "done" || p.data.stage === "failed") {
+          clearInterval(pollRef.current);
+        }
+      } catch {
+        clearInterval(pollRef.current);
+      }
+    }, 3000);
+  };
+
+  // 从历史页打开试卷：带taskId则是"继续出题"（续轮询），否则直接进审核
+  useEffect(() => {
+    if (!openPaper) return;
+    setView("review");
+    setExam(null);
+    setProgress(openPaper.taskId ? { stage: "queued" } : null);
+    getExam(openPaper.paperId).then((ex) => setExam(ex.data));
+    if (openPaper.taskId) startPolling(openPaper.taskId);
+    onOpenHandled();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPaper]);
+
   const handleCreate = async () => {
     if (totalCount === 0) {
       alert("请至少设置一种题型的数量");
@@ -106,37 +164,24 @@ export default function ExamPage({ active }) {
       kp_ids: selectedKps.length > 0 ? selectedKps : null,
     });
 
-    const taskId = res.data.task_id;
-    pollRef.current = setInterval(async () => {
-        try {
-            const p = await getTaskProgress(taskId);
-            setProgress(p.data);
-            if (p.data.paper_id) {
-              const ex = await getExam(p.data.paper_id);
-              setExam(ex.data);
-            }
-            if (p.data.stage === "done" || p.data.stage === "failed") {
-              clearInterval(pollRef.current);
-            }
-          } catch {
-            clearInterval(pollRef.current);
-          }
-        }, 3000);
-      };
+    startPolling(res.data.task_id);
+  };
 
   const refreshExam = async () => {
     const ex = await getExam(exam.id);
     setExam(ex.data);
   };
 
-  const handleReplace = async (qid) => {
+  const handleReplace = async (qid, kpId) => {
     setReplacingId(qid);
+    setReplacePick(null);
     try {
-      await replaceQuestion(exam.id, qid);
+      await replaceQuestion(exam.id, qid, kpId);
       await refreshExam();
-    } catch {
-      alert("换题失败，请重试");
+    } catch (err) {
+      alert(err.response?.data?.detail || "换题失败，请重试");
     }
+    setReplacingId(null);
   };
 
   const startEdit = (q) => {
@@ -349,6 +394,8 @@ export default function ExamPage({ active }) {
         </div>
       </div>
 
+      <ChapterChart chapters={chapterDist} total={exam.questions.length} />
+
       {exam.questions.map((q) => (
         <div key={q.id} style={s.card}>
           <div style={s.cardHeader}>
@@ -368,11 +415,11 @@ export default function ExamPage({ active }) {
             />
           ) : (
             <>
-              <div style={s.qText}>{q.content.question}</div>
+              <div style={s.qText}><MathText>{q.content.question}</MathText></div>
               {q.content.options && (
                 <div style={s.options}>
                   {Object.entries(q.content.options).map(([k, v]) => (
-                    <div key={k}>{k}. {v}</div>
+                    <div key={k}>{k}. <MathText>{v}</MathText></div>
                   ))}
                 </div>
               )}
@@ -383,10 +430,10 @@ export default function ExamPage({ active }) {
                   : q.content.answer || "见参考答案"}
               </div>
               {q.content.explanation && (
-                <div style={s.expl}>解析：{q.content.explanation}</div>
+                <div style={s.expl}>解析：<MathText>{q.content.explanation}</MathText></div>
               )}
               {q.content.model_answer && (
-                <div style={s.expl}>参考答案：{q.content.model_answer}</div>
+                <div style={s.expl}>参考答案：<MathText>{q.content.model_answer}</MathText></div>
               )}
 
               {!approved && (
@@ -394,13 +441,58 @@ export default function ExamPage({ active }) {
                   <button style={s.btn} onClick={() => startEdit(q)}>
                     编辑
                   </button>
-                  <button
-                    style={s.btnWarn}
-                    onClick={() => handleReplace(q.id)}
-                    disabled={replacingId !== null}
-                  >
-                    {replacingId === q.id ? "换题中..." : "换一题"}
-                  </button>
+                  {replacePick?.qid === q.id ? (
+                    <div style={s.replacePanel}>
+                      <select
+                        style={s.replaceSelect}
+                        value={replacePick.kpId || ""}
+                        onChange={(e) =>
+                          setReplacePick({
+                            qid: q.id,
+                            kpId: e.target.value ? Number(e.target.value) : null,
+                          })}
+                      >
+                        <option value="">同当前知识点（{q.kp_name}）</option>
+                        {fullKps.filter((k) => k.level === 1).map((ch) => {
+                          const secs = fullKps.filter(
+                            (k) => k.parent_id === ch.id);
+                          return (
+                            <optgroup key={ch.id} label={ch.name}>
+                              {secs.length === 0 && (
+                                <option value={ch.id}>{ch.name}</option>
+                              )}
+                              {secs.map((sec) => (
+                                <option key={sec.id} value={sec.id}>
+                                  {sec.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          );
+                        })}
+                      </select>
+                      <button
+                        style={s.btnWarn}
+                        onClick={() => handleReplace(q.id, replacePick.kpId)}
+                        disabled={replacingId !== null}
+                      >
+                        确认换题
+                      </button>
+                      <button
+                        style={s.btn}
+                        onClick={() => setReplacePick(null)}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      style={s.btnWarn}
+                      onClick={() => setReplacePick({ qid: q.id, kpId: null })}
+                      disabled={replacingId !== null}
+                    >
+                      {replacingId === q.id ? "换题中..." : "换一题"}
+                    </button>
+                  )}
                 </div>
               )}
             </>
@@ -556,7 +648,12 @@ const s = {
          background: "#fff", cursor: "pointer" },
   btnWarn: { padding: "6px 16px", borderRadius: 6, border: "none",
              background: "#f59e0b", color: "#fff", cursor: "pointer" },
-  btnRow: { display: "flex", gap: 10, marginTop: 12 },
+  btnRow: { display: "flex", gap: 10, marginTop: 12, alignItems: "center",
+            flexWrap: "wrap" },
+  replacePanel: { display: "flex", gap: 8, alignItems: "center",
+                  flexWrap: "wrap" },
+  replaceSelect: { padding: "6px 8px", fontSize: 13, borderRadius: 6,
+                   border: "1px solid #d1d5db", maxWidth: 320 },
   progressTitle: { fontWeight: "bold", fontSize: 15 },
   progressDetail: { fontSize: 13, color: "#555", margin: "8px 0" },
   error: { color: "#dc2626", marginBottom: 12 },

@@ -74,6 +74,7 @@ def extract_topics_by_ai(text: str, filename: str) -> list[dict]:
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
             format="json",
+            think=False,
             options={"temperature": 0.2, "num_predict": 600}
         )
         content = response["message"]["content"]
@@ -122,6 +123,7 @@ def ai_process_chapter(chapter_data: dict, index: int) -> dict:
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
             format="json",
+            think=False,
             options={"temperature": 0.1, "num_predict": 500}
         )
         content = response["message"]["content"]
@@ -164,6 +166,7 @@ def get_subject_name(text_preview: str) -> dict:
             model=OLLAMA_MODEL,
             messages=[{"role": "user", "content": prompt}],
             format="json",
+            think=False,
             options={"temperature": 0.1, "num_predict": 100}
         )
         content = response["message"]["content"]

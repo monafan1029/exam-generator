@@ -24,6 +24,12 @@ COMMON_RULES = """
 3. 严禁组合型选项（如"1和3"、"以上都是"），每个选项必须是独立完整的陈述
 4. 干扰项构造要求（关键质量项）：
    - 每个干扰项必须与题干的提问直接对位，是对同一问题的不同回答
+   - 极性一致（最重要）：题干问"问题/缺陷/局限"，四个选项必须全部是负面表述
+     （三个干扰项是"听起来像但实际不成立的问题"）；题干问"优势/作用/特点"，
+     四个选项必须全部是同类正面表述。严禁把优点混进"找问题"的选项里，
+     否则学生只看语气就能排除，题目作废
+   - 秒杀自检：出完题后自问——一个没学过教材的人能否仅凭选项语气、长度、
+     常识就锁定答案？能则必须重写干扰项
    - 干扰项应通过以下方式构造：细节篡改（数字/名称/版本改错）、
      张冠李戴（把其他相关概念的特性安到本概念上）、因果错位（事实正确但与题干问的机制无关）
    - 严禁使用"仅能"、"完全不"、"未采用任何"等极端否定表述作为干扰项
@@ -37,6 +43,8 @@ COMMON_RULES = """
 7. 题干应是简洁的疑问句，不复述教材原文段落，不含"本题考查"等元话语
 8. 数学公式一律使用LaTeX格式，行内公式用$...$包裹，
    例如 $P(w_t | w_1, \\ldots, w_{t-1})$，禁止用纯文本堆砌公式
+9. 解析中严禁引用选项字母（如"选项B错误"），必须直接陈述选项内容本身的对错及原因
+10. 四个选项的长度和细节程度应大致相当，正确答案不得明显比干扰项更长更详细
 """
 
 
@@ -67,17 +75,24 @@ def build_thought_prompt(kp_name: str, dimension: str,
 
 
 def build_single_select_prompt(kp_name: str, context: str,
-                                thought: str) -> str:
-    """CoT第二步：基于分析生成单选题"""
-    return f"""你是出题专家。基于以下分析，生成最终的单选题。
+                                thought: str = None,
+                                dimension_desc: str = None) -> str:
+    """
+    生成单选题。
+    thought为None时走单步模式（跳过CoT提速），此时用dimension_desc直接注入出题维度
+    """
+    if thought:
+        guidance = f"你之前的出题分析：\n{thought}"
+    else:
+        guidance = f"出题维度：{dimension_desc}" if dimension_desc else ""
+
+    return f"""你是出题专家。请为以下知识点生成一道单选题。
 
 知识点：{kp_name}
+{guidance}
 
 教材原文：
 {context}
-
-你之前的出题分析：
-{thought}
 
 {COMMON_RULES}
 
@@ -146,3 +161,30 @@ def build_judge_prompt(question_json: str, context: str) -> str:
 
 只输出JSON：
 {{"status": "passed" 或 "rejected", "reason": "如果rejected，说明具体原因"}}"""
+
+
+def build_polarity_prompt(question: str, options: dict) -> str:
+    """
+    独立的极性标注任务（供程序化秒杀检验用）。
+    只做分类不做评判，小模型聚焦单一任务才稳定。
+    """
+    opts_text = "\n".join(f"{k}. {v}" for k, v in options.items())
+    return f"""对一道选择题做极性标注，只做分类，不评价题目好坏。
+
+判定规则——只看句子主干对主语的断言方向：
+- 肯定其能力/作用（"能够…"、"可以…"、"提供…"、"通过…实现…"）= positive
+- 否定其能力/指出问题（"无法…"、"难以…"、"缺乏…"、"存在…问题"）= negative
+- 无褒贬的事实陈述 = neutral
+- 陷阱示例："能够精准捕捉深层语义的偏差"——句中虽有"偏差"一词，
+  但主干是"能够捕捉"（肯定能力）→ positive；
+  "无法有效处理复杂创作型任务"——主干是"无法处理" → negative
+
+题干（标注它问的方向，问缺点/问题/不正确项=negative，问优点/作用/正确项=positive）：
+{question}
+
+选项（逐个标注）：
+{opts_text}
+
+只输出JSON：
+{{"stem_asks": "negative/positive/neutral",
+  "options_polarity": {{"A": "...", "B": "...", "C": "...", "D": "..."}}}}"""

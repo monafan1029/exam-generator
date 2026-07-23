@@ -1,11 +1,63 @@
 """
 PDF导出模块
 生成题目版（学生用）和答案版（教师用）两份PDF
+$...$ 包裹的LaTeX公式经matplotlib mathtext渲染成SVG内嵌图片
 """
 import os
+import re
+import io
 import json
+import base64
+import html as html_lib
+
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib import mathtext
+from matplotlib.font_manager import FontProperties
+
 from weasyprint import HTML, CSS
 from ..database import get_db
+
+# mathtext不支持的命令替换成等价写法
+_MATHTEXT_SUBS = [
+    (re.compile(r'\\text\s*\{'), r'\\mathrm{'),
+    (re.compile(r'\\thinspace'), r'\\,'),
+    (re.compile(r'\\ldots'), r'\\dots'),
+]
+
+
+def _render_formula(tex: str) -> str:
+    """单个LaTeX公式 -> 内嵌SVG的<img>标签；渲染失败回退为转义原文"""
+    cleaned = tex.strip()
+    for pat, rep in _MATHTEXT_SUBS:
+        cleaned = pat.sub(rep, cleaned)
+    try:
+        buf = io.BytesIO()
+        mathtext.math_to_image(
+            f"${cleaned}$", buf, format="svg",
+            prop=FontProperties(size=11)
+        )
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return (f'<img class="math" alt="{html_lib.escape(tex)}" '
+                f'src="data:image/svg+xml;base64,{b64}"/>')
+    except Exception:
+        return html_lib.escape(f"${tex}$")
+
+
+def htmlize(text) -> str:
+    """
+    题目文本 -> 安全HTML：普通文字转义，$...$公式渲染成数学式。
+    所有插入HTML模板的动态文本都必须经过这里。
+    """
+    text = str(text or "")
+    parts = re.split(r'(\$[^$]+\$)', text)
+    out = []
+    for part in parts:
+        if len(part) > 2 and part.startswith("$") and part.endswith("$"):
+            out.append(_render_formula(part[1:-1]))
+        else:
+            out.append(html_lib.escape(part))
+    return "".join(out)
 
 OUTPUT_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -71,6 +123,7 @@ body {
   color: #333; font-size: 10.5pt; line-height: 1.65;
 }
 .key-points ul { padding-left: 18px; margin: 4px 0; }
+img.math { height: 1.15em; vertical-align: -0.25em; }
 .footer {
   text-align: center; font-size: 9.5pt; color: #888;
   margin-top: 16px; border-top: 1px solid #ccc; padding-top: 7px;
@@ -138,12 +191,12 @@ def build_exam_html(paper: dict) -> str:
             c = q["content"]
             if t in ("single_select", "multi_select"):
                 opts = "".join(
-                    f'<div class="option">{k}. {v}</div>'
+                    f'<div class="option">{k}. {htmlize(v)}</div>'
                     for k, v in c.get("options", {}).items()
                 )
                 items += f"""
 <div class="question">
-  <div class="question-stem">{q["order"]}. {c.get("question","")}
+  <div class="question-stem">{q["order"]}. {htmlize(c.get("question",""))}
     <span class="score-tag">（{q["score"]:g}分）</span>
     <span class="blank">（　　）</span>
   </div>
@@ -156,7 +209,7 @@ def build_exam_html(paper: dict) -> str:
                 )
                 items += f"""
 <div class="question">
-  <div class="question-stem">{q["order"]}. {c.get("question","")}
+  <div class="question-stem">{q["order"]}. {htmlize(c.get("question",""))}
     <span class="score-tag">（{q["score"]:g}分）</span>
   </div>
   <div>{lines}</div>
@@ -197,7 +250,7 @@ def build_answer_html(paper: dict) -> str:
         c = q["content"]
         if q["type"] in ("single_select", "multi_select"):
             opts = "".join(
-                f'<div class="option">{k}. {v}</div>'
+                f'<div class="option">{k}. {htmlize(v)}</div>'
                 for k, v in c.get("options", {}).items()
             )
             ans = c.get("answer", "")
@@ -205,22 +258,23 @@ def build_answer_html(paper: dict) -> str:
                 ans = "、".join(ans)
             items += f"""
 <div class="question">
-  <div class="question-stem">{q["order"]}. [{TYPE_NAMES[q["type"]]}·{q["score"]:g}分] [{q["kp_name"]}] {c.get("question","")}</div>
+  <div class="question-stem">{q["order"]}. [{TYPE_NAMES[q["type"]]}·{q["score"]:g}分] [{htmlize(q["kp_name"])}] {htmlize(c.get("question",""))}</div>
   <div class="options">{opts}</div>
   <div class="answer-box">
     <span class="answer-label">正确答案：</span>
-    <span class="answer-value">{ans}</span>
+    <span class="answer-value">{html_lib.escape(str(ans))}</span>
   </div>
-  <div class="explanation"><span class="answer-label">解析：</span>{c.get("explanation","")}</div>
+  <div class="explanation"><span class="answer-label">解析：</span>{htmlize(c.get("explanation",""))}</div>
 </div>"""
         else:
-            pts = "".join(f"<li>{p}</li>" for p in c.get("key_points", []))
+            pts = "".join(f"<li>{htmlize(p)}</li>"
+                          for p in c.get("key_points", []))
             items += f"""
 <div class="question">
-  <div class="question-stem">{q["order"]}. [{TYPE_NAMES[q["type"]]}·{q["score"]:g}分] [{q["kp_name"]}] {c.get("question","")}</div>
+  <div class="question-stem">{q["order"]}. [{TYPE_NAMES[q["type"]]}·{q["score"]:g}分] [{htmlize(q["kp_name"])}] {htmlize(c.get("question",""))}</div>
   <div class="answer-box">
     <span class="answer-label">参考答案：</span>
-    <p style="margin-top:5px;">{c.get("model_answer","")}</p>
+    <p style="margin-top:5px;">{htmlize(c.get("model_answer",""))}</p>
     <div class="key-points"><strong>评分要点：</strong><ul>{pts}</ul></div>
   </div>
 </div>"""

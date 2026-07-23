@@ -449,7 +449,7 @@ def get_exam(paper_id: int):
         cur.execute("""
             SELECT q.id, epq.question_order, epq.score,
                    q.question_type, q.content, q.status,
-                   q.dimension, kp.name
+                   q.dimension, kp.name, kp.id
             FROM exam_paper_questions epq
             JOIN questions q ON epq.question_id = q.id
             JOIN knowledge_points kp ON q.knowledge_point_id = kp.id
@@ -459,7 +459,7 @@ def get_exam(paper_id: int):
         questions = [
             {"id": r[0], "order": r[1], "score": float(r[2]),
              "type": r[3], "content": r[4], "status": r[5],
-             "dimension": r[6], "kp_name": r[7]}
+             "dimension": r[6], "kp_name": r[7], "kp_id": r[8]}
             for r in cur.fetchall()
         ]
 
@@ -472,6 +472,51 @@ def get_exam(paper_id: int):
         "questions": questions,
         "total_score": sum(q["score"] for q in questions)
     }
+
+
+@app.post("/api/exams/{paper_id}/resume")
+def resume_exam(paper_id: int):
+    """
+    继续出题：出题中断（刷新/后端重启）的试卷按落库的配置补齐缺口。
+    补齐后自动转入审核状态。
+    """
+    with get_db() as (conn, cur):
+        cur.execute("""
+            SELECT document_id, status, gen_config
+            FROM exam_papers WHERE id = %s
+        """, (paper_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "试卷不存在")
+    document_id, status, gen_config = row
+
+    if status == "approved":
+        raise HTTPException(400, "试卷已成卷，无需继续出题")
+    if not gen_config or not gen_config.get("config"):
+        raise HTTPException(
+            400, "该试卷没有保存出题配置（旧版本创建），无法继续，请删除后重新组卷")
+
+    with get_db() as (conn, cur):
+        cur.execute("""
+            UPDATE exam_papers SET status = 'generating' WHERE id = %s
+        """, (paper_id,))
+
+    task_id = f"exam_resume_{paper_id}_{int(time.time())}"
+    task_progress[task_id] = {"stage": "queued", "paper_id": paper_id}
+
+    def run_fill():
+        try:
+            from src.exam.exam_builder import fill_exam
+            fill_exam(paper_id, document_id,
+                      gen_config["config"], gen_config.get("kp_ids"),
+                      task_id, task_progress)
+        except Exception as e:
+            task_progress[task_id] = {
+                "stage": "failed", "error": str(e), "paper_id": paper_id}
+
+    threading.Thread(target=run_fill, daemon=True).start()
+    return {"task_id": task_id, "paper_id": paper_id,
+            "message": "已继续出题"}
 
 
 @app.delete("/api/exams/{paper_id}")
@@ -489,8 +534,12 @@ def delete_exam(paper_id: int):
 
 
 @app.post("/api/exams/{paper_id}/replace/{question_id}")
-def replace_question(paper_id: int, question_id: int):
-    """换题：废弃当前题，重新生成一道补上"""
+def replace_question(paper_id: int, question_id: int,
+                     new_kp_id: int = None):
+    """
+    换题：废弃当前题，重新生成一道补上。
+    new_kp_id指定新题的知识点（换章节出题）；不传则沿用原知识点。
+    """
     from src.generator.question_generator import generate_one_question
     from src.generator import prompts
     import random
@@ -512,6 +561,21 @@ def replace_question(paper_id: int, question_id: int):
             raise HTTPException(404, "题目不在该试卷中")
         order, score, q_type, kp_id, chunk_id, document_id, kp_name = row
 
+        # 指定了新知识点：校验其存在且有可出题的切片
+        if new_kp_id and new_kp_id != kp_id:
+            cur.execute("""
+                SELECT kp.name, MIN(kc.id)
+                FROM knowledge_points kp
+                JOIN knowledge_chunks kc ON kc.knowledge_point_id = kp.id
+                WHERE kp.id = %s AND kp.document_id = %s
+                GROUP BY kp.name
+            """, (new_kp_id, document_id))
+            kp_row = cur.fetchone()
+            if not kp_row:
+                raise HTTPException(400, "该知识点没有可出题的内容")
+            kp_id, chunk_id = new_kp_id, kp_row[1]
+            kp_name = kp_row[0]
+
         # 废弃旧题
         cur.execute("UPDATE questions SET status='retired' WHERE id=%s",
                     (question_id,))
@@ -520,8 +584,9 @@ def replace_question(paper_id: int, question_id: int):
             WHERE paper_id = %s AND question_id = %s
         """, (paper_id, question_id))
 
-    # 生成新题（最多试5次）
-    dimensions = list(prompts.DIMENSIONS.keys())
+    # 生成新题（最多试5次）；反例排除维度不适合简答题
+    dimensions = [d for d in prompts.DIMENSIONS
+                  if not (q_type == "short_answer" and d == "counter")]
     for _ in range(5):
         dim = random.choice(dimensions)
         result = generate_one_question(
