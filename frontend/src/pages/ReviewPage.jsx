@@ -11,6 +11,7 @@ import {
   updateQuestionContent,
   createManualExam,
 } from "../api/client";
+import MathText from "../components/MathText";
 
 const TYPE_LABELS = {
   single_select: "单选题",
@@ -377,8 +378,23 @@ export default function ReviewPage({ active }) {
                       答案：
                       {Array.isArray(q.content.answer)
                         ? q.content.answer.join("、")
-                        : q.content.answer || "见参考答案"}
+                        : q.content.answer || "见下方参考答案"}
                     </div>
+                    {q.content.explanation && (
+                      <div style={s.expl}>
+                        解析：<MathText>{q.content.explanation}</MathText>
+                      </div>
+                    )}
+                    {q.content.model_answer && (
+                      <div style={s.expl}>
+                        参考答案：<MathText>{q.content.model_answer}</MathText>
+                      </div>
+                    )}
+                    {q.content.key_points?.length > 0 && (
+                      <div style={s.expl}>
+                        评分要点：{q.content.key_points.join("；")}
+                      </div>
+                    )}
                     <div style={s.btnRow}>
                       <button style={s.btn} onClick={() => startEdit(q)}>
                         编辑
@@ -405,76 +421,86 @@ export default function ReviewPage({ active }) {
 }
 
 const s = {
-  container: { maxWidth: 900, margin: "0 auto", padding: 24 },
-  subtitle: { color: "#666", fontSize: 14 },
+  container: { maxWidth: 900, margin: "0 auto", padding: "32px 24px 48px" },
+  subtitle: { color: "#71717a", fontSize: 14 },
   filterBar: { display: "flex", gap: 12, alignItems: "center", marginBottom: 16 },
-  select: { padding: "6px 10px", fontSize: 14, borderRadius: 6 },
-  count: { color: "#666", fontSize: 14 },
+  select: { padding: "8px 12px", fontSize: 14, borderRadius: 8,
+            border: "1px solid #dcdfe4", background: "#fff" },
+  count: { color: "#71717a", fontSize: 14 },
   examPanel: {
-    position: "sticky", top: 0, zIndex: 10,
+    position: "sticky", top: 66, zIndex: 10,
     display: "flex", gap: 12, alignItems: "center",
-    padding: 12, background: "#eff6ff",
-    border: "1px solid #2563eb", borderRadius: 8, marginBottom: 16,
+    padding: "14px 16px", background: "#eef4ff",
+    border: "1px solid #bfd4fb", borderRadius: 12, marginBottom: 16,
+    boxShadow: "0 4px 14px rgba(37, 99, 235, 0.12)",
   },
   titleInput: {
-    padding: "6px 10px", fontSize: 14,
-    border: "1px solid #d1d5db", borderRadius: 6, width: 200,
+    padding: "8px 12px", fontSize: 14,
+    border: "1px solid #dcdfe4", borderRadius: 8, width: 200,
   },
-  examPanelInfo: { fontSize: 14, fontWeight: "bold" },
+  examPanelInfo: { fontSize: 14, fontWeight: 600, color: "#1e40af" },
   successBanner: {
     display: "flex", gap: 12, alignItems: "center",
-    padding: 12, background: "#f0fdf4",
-    border: "1px solid #16a34a", borderRadius: 8, marginBottom: 16,
-    fontSize: 14,
+    padding: "14px 16px", background: "#f0fdf4",
+    border: "1px solid #a7e0bb", borderRadius: 12, marginBottom: 16,
+    fontSize: 14, boxShadow: "0 2px 8px rgba(22, 163, 74, 0.1)",
   },
   sectionTitle: {
-    borderLeft: "4px solid #2563eb", paddingLeft: 10, marginTop: 24,
+    borderLeft: "4px solid #2563eb", paddingLeft: 12, marginTop: 26,
+    color: "#0f172a", fontSize: 16,
   },
   card: {
-    border: "1px solid #e5e7eb", borderRadius: 8,
-    padding: 16, marginBottom: 12,
+    border: "1px solid #eceef2", borderRadius: 12,
+    padding: 18, marginBottom: 12, background: "#fff",
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
   },
-  cardSelected: { borderColor: "#2563eb", background: "#f8faff" },
+  cardSelected: { borderColor: "#2563eb", background: "#f5f9ff",
+                  boxShadow: "0 2px 10px rgba(37, 99, 235, 0.1)" },
   cardHeader: {
-    display: "flex", gap: 10, alignItems: "center", marginBottom: 8,
+    display: "flex", gap: 10, alignItems: "center", marginBottom: 10,
   },
-  kpName: { fontSize: 13, color: "#555" },
-  scoreEdit: { marginLeft: "auto", fontSize: 13 },
+  kpName: { fontSize: 13, color: "#71717a" },
+  scoreEdit: { marginLeft: "auto", fontSize: 13, color: "#52525b" },
   scoreInput: {
-    width: 50, marginLeft: 4, padding: "2px 6px",
-    border: "1px solid #d1d5db", borderRadius: 4,
+    width: 52, marginLeft: 6, padding: "4px 8px",
+    border: "1px solid #dcdfe4", borderRadius: 6,
   },
-  qText: { fontSize: 15, marginBottom: 8, lineHeight: 1.7 },
-  options: { paddingLeft: 16, fontSize: 14, lineHeight: 1.9 },
-  answer: { marginTop: 8, fontWeight: "bold", fontSize: 14 },
-  btnRow: { display: "flex", gap: 10, marginTop: 12 },
+  qText: { fontSize: 15, marginBottom: 10, lineHeight: 1.75, color: "#18181b" },
+  options: { paddingLeft: 16, fontSize: 14, lineHeight: 2, color: "#3f3f46" },
+  answer: { marginTop: 10, fontWeight: 600, fontSize: 14, color: "#0f172a" },
+  expl: { marginTop: 8, padding: 12, background: "#f7f8fa",
+          border: "1px solid #eceef2",
+          fontSize: 13, color: "#52525b", borderRadius: 8, lineHeight: 1.75 },
+  btnRow: { display: "flex", gap: 10, marginTop: 14 },
   btn: {
-    padding: "6px 16px", borderRadius: 6,
-    border: "1px solid #d1d5db", background: "#fff", cursor: "pointer",
+    padding: "7px 16px", borderRadius: 8, fontSize: 13.5, fontWeight: 500,
+    border: "1px solid #dcdfe4", background: "#fff", cursor: "pointer",
+    color: "#3f3f46",
   },
   btnDanger: {
-    padding: "6px 16px", borderRadius: 6,
-    border: "1px solid #dc2626", color: "#dc2626",
+    padding: "7px 16px", borderRadius: 8, fontSize: 13.5, fontWeight: 500,
+    border: "1px solid #f0b4b4", color: "#dc2626",
     background: "#fff", cursor: "pointer",
   },
   primaryBtn: {
-    padding: "6px 18px", borderRadius: 6, border: "none",
-    background: "#2563eb", color: "#fff", cursor: "pointer",
+    padding: "8px 20px", borderRadius: 8, border: "none", fontSize: 14,
+    fontWeight: 600, background: "#2563eb", color: "#fff", cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(37, 99, 235, 0.28)",
   },
-  empty: { color: "#999", marginTop: 40, textAlign: "center" },
+  empty: { color: "#9ca3af", marginTop: 48, textAlign: "center", fontSize: 14 },
   formRow: {
     display: "flex", gap: 10, marginBottom: 10, alignItems: "flex-start",
   },
   formLabel: {
-    width: 70, fontSize: 13, color: "#555", paddingTop: 6, flexShrink: 0,
+    width: 70, fontSize: 13, color: "#52525b", paddingTop: 8, flexShrink: 0,
   },
   formInput: {
-    flex: 1, padding: "6px 10px", fontSize: 14,
-    border: "1px solid #d1d5db", borderRadius: 6,
+    flex: 1, padding: "8px 12px", fontSize: 14,
+    border: "1px solid #dcdfe4", borderRadius: 8,
   },
   formTextarea: {
-    flex: 1, padding: "6px 10px", fontSize: 14,
-    border: "1px solid #d1d5db", borderRadius: 6,
-    fontFamily: "inherit", lineHeight: 1.6,
+    flex: 1, padding: "8px 12px", fontSize: 14,
+    border: "1px solid #dcdfe4", borderRadius: 8,
+    fontFamily: "inherit", lineHeight: 1.7,
   },
 };

@@ -351,14 +351,20 @@ class CreateExamRequest(BaseModel):
     multi_select: ExamTypeConfig = None
     short_answer: ExamTypeConfig = None
     kp_ids: list[int] = None   # 选定的知识点范围，None表示全部
+    difficulty_ratio: dict = None    # {"1":易权重,"2":中,"3":难}，None=全中等
+    chapter_weights: dict = None     # {章节kp_id: 权重}，None=均匀覆盖
 
 
 def run_create_exam(document_id: int, title: str,
-                    config: dict, kp_ids: list, task_id: str):
+                    config: dict, kp_ids: list, task_id: str,
+                    difficulty_ratio: dict = None,
+                    chapter_weights: dict = None):
     """后台任务：按需出题组卷"""
     try:
         create_exam(document_id, title, config, kp_ids,
-                    task_id, task_progress)
+                    task_id, task_progress,
+                    difficulty_ratio=difficulty_ratio,
+                    chapter_weights=chapter_weights)
     except Exception as e:
         task_progress[task_id] = {"stage": "failed", "error": str(e)}
 
@@ -391,7 +397,8 @@ def create_exam_api(req: CreateExamRequest):
 
     thread = threading.Thread(
         target=run_create_exam,
-        args=(req.document_id, req.title, config, req.kp_ids, task_id),
+        args=(req.document_id, req.title, config, req.kp_ids, task_id,
+              req.difficulty_ratio, req.chapter_weights),
         daemon=True
     )
     thread.start()
@@ -449,7 +456,7 @@ def get_exam(paper_id: int):
         cur.execute("""
             SELECT q.id, epq.question_order, epq.score,
                    q.question_type, q.content, q.status,
-                   q.dimension, kp.name
+                   q.dimension, kp.name, kp.id
             FROM exam_paper_questions epq
             JOIN questions q ON epq.question_id = q.id
             JOIN knowledge_points kp ON q.knowledge_point_id = kp.id
@@ -459,7 +466,7 @@ def get_exam(paper_id: int):
         questions = [
             {"id": r[0], "order": r[1], "score": float(r[2]),
              "type": r[3], "content": r[4], "status": r[5],
-             "dimension": r[6], "kp_name": r[7]}
+             "dimension": r[6], "kp_name": r[7], "kp_id": r[8]}
             for r in cur.fetchall()
         ]
 
@@ -472,6 +479,53 @@ def get_exam(paper_id: int):
         "questions": questions,
         "total_score": sum(q["score"] for q in questions)
     }
+
+
+@app.post("/api/exams/{paper_id}/resume")
+def resume_exam(paper_id: int):
+    """
+    继续出题：出题中断（刷新/后端重启）的试卷按落库的配置补齐缺口。
+    补齐后自动转入审核状态。
+    """
+    with get_db() as (conn, cur):
+        cur.execute("""
+            SELECT document_id, status, gen_config
+            FROM exam_papers WHERE id = %s
+        """, (paper_id,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "试卷不存在")
+    document_id, status, gen_config = row
+
+    if status == "approved":
+        raise HTTPException(400, "试卷已成卷，无需继续出题")
+    if not gen_config or not gen_config.get("config"):
+        raise HTTPException(
+            400, "该试卷没有保存出题配置（旧版本创建），无法继续，请删除后重新组卷")
+
+    with get_db() as (conn, cur):
+        cur.execute("""
+            UPDATE exam_papers SET status = 'generating' WHERE id = %s
+        """, (paper_id,))
+
+    task_id = f"exam_resume_{paper_id}_{int(time.time())}"
+    task_progress[task_id] = {"stage": "queued", "paper_id": paper_id}
+
+    def run_fill():
+        try:
+            from src.exam.exam_builder import fill_exam
+            fill_exam(paper_id, document_id,
+                      gen_config["config"], gen_config.get("kp_ids"),
+                      task_id, task_progress,
+                      difficulty_ratio=gen_config.get("difficulty_ratio"),
+                      chapter_weights=gen_config.get("chapter_weights"))
+        except Exception as e:
+            task_progress[task_id] = {
+                "stage": "failed", "error": str(e), "paper_id": paper_id}
+
+    threading.Thread(target=run_fill, daemon=True).start()
+    return {"task_id": task_id, "paper_id": paper_id,
+            "message": "已继续出题"}
 
 
 @app.delete("/api/exams/{paper_id}")
@@ -489,8 +543,12 @@ def delete_exam(paper_id: int):
 
 
 @app.post("/api/exams/{paper_id}/replace/{question_id}")
-def replace_question(paper_id: int, question_id: int):
-    """换题：废弃当前题，重新生成一道补上"""
+def replace_question(paper_id: int, question_id: int,
+                     new_kp_id: int = None):
+    """
+    换题：废弃当前题，重新生成一道补上。
+    new_kp_id指定新题的知识点（换章节出题）；不传则沿用原知识点。
+    """
     from src.generator.question_generator import generate_one_question
     from src.generator import prompts
     import random
@@ -512,6 +570,21 @@ def replace_question(paper_id: int, question_id: int):
             raise HTTPException(404, "题目不在该试卷中")
         order, score, q_type, kp_id, chunk_id, document_id, kp_name = row
 
+        # 指定了新知识点：校验其存在且有可出题的切片
+        if new_kp_id and new_kp_id != kp_id:
+            cur.execute("""
+                SELECT kp.name, MIN(kc.id)
+                FROM knowledge_points kp
+                JOIN knowledge_chunks kc ON kc.knowledge_point_id = kp.id
+                WHERE kp.id = %s AND kp.document_id = %s
+                GROUP BY kp.name
+            """, (new_kp_id, document_id))
+            kp_row = cur.fetchone()
+            if not kp_row:
+                raise HTTPException(400, "该知识点没有可出题的内容")
+            kp_id, chunk_id = new_kp_id, kp_row[1]
+            kp_name = kp_row[0]
+
         # 废弃旧题
         cur.execute("UPDATE questions SET status='retired' WHERE id=%s",
                     (question_id,))
@@ -520,8 +593,9 @@ def replace_question(paper_id: int, question_id: int):
             WHERE paper_id = %s AND question_id = %s
         """, (paper_id, question_id))
 
-    # 生成新题（最多试5次）
-    dimensions = list(prompts.DIMENSIONS.keys())
+    # 生成新题（最多试5次）；反例排除维度不适合简答题
+    dimensions = [d for d in prompts.DIMENSIONS
+                  if not (q_type == "short_answer" and d == "counter")]
     for _ in range(5):
         dim = random.choice(dimensions)
         result = generate_one_question(
@@ -607,6 +681,82 @@ def create_manual_exam(req: ManualExamRequest):
             """, (q["id"],))
 
     return {"paper_id": paper_id, "message": "试卷已生成"}
+
+DIFF_LABELS = {1: "易", 2: "中", 3: "难", 4: "中"}  # 旧数据4按中处理
+
+
+def _load_export_rows(paper_id: int) -> list:
+    with get_db() as (conn, cur):
+        cur.execute("""
+            SELECT epq.question_order, q.question_type, q.difficulty,
+                   kp.name, q.content, epq.score
+            FROM exam_paper_questions epq
+            JOIN questions q ON epq.question_id = q.id
+            JOIN knowledge_points kp ON q.knowledge_point_id = kp.id
+            WHERE epq.paper_id = %s ORDER BY epq.question_order
+        """, (paper_id,))
+        rows = cur.fetchall()
+    if not rows:
+        raise HTTPException(404, "试卷不存在或没有题目")
+    out = []
+    type_names = {"single_select": "单选题", "multi_select": "多选题",
+                  "short_answer": "简答题"}
+    for order, qtype, diff, kp_name, c, score in rows:
+        ans = c.get("answer", "")
+        out.append({
+            "order": order,
+            "type": type_names.get(qtype, qtype),
+            "difficulty": DIFF_LABELS.get(diff, "中"),
+            "knowledge_point": kp_name.strip(),
+            "question": c.get("question", ""),
+            "option_a": (c.get("options") or {}).get("A", ""),
+            "option_b": (c.get("options") or {}).get("B", ""),
+            "option_c": (c.get("options") or {}).get("C", ""),
+            "option_d": (c.get("options") or {}).get("D", ""),
+            "answer": "、".join(ans) if isinstance(ans, list) else str(ans),
+            "explanation": c.get("explanation", ""),
+            "model_answer": c.get("model_answer", ""),
+            "key_points": "；".join(c.get("key_points") or []),
+            "score": float(score),
+        })
+    return out
+
+
+@app.get("/api/exams/{paper_id}/export/{fmt}")
+def export_exam(paper_id: int, fmt: str):
+    """导出在线考试系统通用格式。fmt: xlsx（每题一行）/ json（结构化）"""
+    if fmt not in ("xlsx", "json"):
+        raise HTTPException(400, "fmt必须是xlsx或json")
+    rows = _load_export_rows(paper_id)
+
+    if fmt == "json":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content={"paper_id": paper_id, "questions": rows},
+            headers={"Content-Disposition":
+                     f'attachment; filename="paper_{paper_id}.json"'})
+
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "试卷"
+    headers = ["序号", "题型", "难度", "知识点", "题干", "选项A", "选项B",
+               "选项C", "选项D", "答案", "解析", "参考答案", "评分要点", "分值"]
+    ws.append(headers)
+    for r in rows:
+        ws.append([r["order"], r["type"], r["difficulty"],
+                   r["knowledge_point"], r["question"], r["option_a"],
+                   r["option_b"], r["option_c"], r["option_d"], r["answer"],
+                   r["explanation"], r["model_answer"], r["key_points"],
+                   r["score"]])
+    path = os.path.join(os.path.dirname(__file__), "outputs",
+                        f"paper_{paper_id}_export.xlsx")
+    wb.save(path)
+    return FileResponse(
+        path, filename=f"试卷_{paper_id}_导出.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument"
+                   ".spreadsheetml.sheet")
+
 
 @app.get("/api/exams/{paper_id}/pdf/{version}")
 def download_pdf(paper_id: int, version: str):

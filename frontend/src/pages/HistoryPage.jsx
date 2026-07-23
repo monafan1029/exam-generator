@@ -3,7 +3,7 @@
  * 列出所有已生成的试卷，支持按教材筛选、重新下载PDF、删除试卷
  */
 import { useState, useEffect, useCallback } from "react";
-import { listDocuments, listExams, deleteExam } from "../api/client";
+import { listDocuments, listExams, deleteExam, resumeExam } from "../api/client";
 
 const STATUS_LABELS = {
   generating: "出题中",
@@ -11,11 +11,12 @@ const STATUS_LABELS = {
   approved: "已成卷",
 };
 
-export default function HistoryPage({ active }) {
+export default function HistoryPage({ active, onOpenPaper }) {
   const [documents, setDocuments] = useState([]);
   const [docId, setDocId] = useState(null); // null = 全部教材
   const [exams, setExams] = useState([]);
   const [deletingId, setDeletingId] = useState(null);
+  const [resumingId, setResumingId] = useState(null);
 
   useEffect(() => {
     if (!active) return;
@@ -29,6 +30,17 @@ export default function HistoryPage({ active }) {
   useEffect(() => {
     if (active) refresh();
   }, [active, refresh]);
+
+  const handleResume = async (paperId) => {
+    setResumingId(paperId);
+    try {
+      const res = await resumeExam(paperId);
+      onOpenPaper(paperId, res.data.task_id);
+    } catch (err) {
+      alert(err.response?.data?.detail || "继续出题失败，请重试");
+    }
+    setResumingId(null);
+  };
 
   const handleDelete = async (paperId, title) => {
     if (!window.confirm(`确定删除试卷《${title}》？（题库中的题目不受影响）`))
@@ -105,9 +117,34 @@ export default function HistoryPage({ active }) {
                     >
                       下载答案版PDF
                     </a>
+                    <a
+                      href={`http://localhost:8000/api/exams/${exam.id}/export/xlsx`}
+                      style={{ ...s.btn, textDecoration: "none" }}
+                    >
+                      导出Excel
+                    </a>
+                    <a
+                      href={`http://localhost:8000/api/exams/${exam.id}/export/json`}
+                      style={{ ...s.btn, textDecoration: "none" }}
+                    >
+                      导出JSON
+                    </a>
                   </>
+                ) : exam.status === "generating" ? (
+                  <button
+                    style={s.btnPrimary}
+                    onClick={() => handleResume(exam.id)}
+                    disabled={resumingId === exam.id}
+                  >
+                    {resumingId === exam.id ? "启动中..." : "继续出题"}
+                  </button>
                 ) : (
-                  <span style={s.hint}>未成卷，暂不可下载</span>
+                  <button
+                    style={s.btnPrimary}
+                    onClick={() => onOpenPaper(exam.id, null)}
+                  >
+                    继续审核
+                  </button>
                 )}
                 <button
                   style={s.btnDanger}
@@ -126,33 +163,42 @@ export default function HistoryPage({ active }) {
 }
 
 const s = {
-  container: { maxWidth: 900, margin: "0 auto", padding: 24 },
-  subtitle: { color: "#666", fontSize: 14 },
+  container: { maxWidth: 900, margin: "0 auto", padding: "32px 24px 48px" },
+  subtitle: { color: "#71717a", fontSize: 14 },
   filterBar: { display: "flex", gap: 12, alignItems: "center", marginBottom: 16 },
-  select: { padding: "6px 10px", fontSize: 14, borderRadius: 6 },
-  count: { color: "#666", fontSize: 14 },
-  empty: { color: "#999", marginTop: 40, textAlign: "center" },
+  select: { padding: "8px 12px", fontSize: 14, borderRadius: 8,
+            border: "1px solid #dcdfe4", background: "#fff" },
+  count: { color: "#71717a", fontSize: 14 },
+  empty: { color: "#9ca3af", marginTop: 48, textAlign: "center", fontSize: 14 },
   card: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
-    border: "1px solid #e5e7eb", borderRadius: 8,
-    padding: 16, marginBottom: 12, gap: 16,
+    border: "1px solid #eceef2", borderRadius: 12,
+    padding: 18, marginBottom: 12, gap: 16, background: "#fff",
+    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
   },
   cardMain: { flex: 1, minWidth: 0 },
-  title: { fontWeight: "bold", fontSize: 15 },
-  meta: { fontSize: 13, color: "#666", marginTop: 4 },
-  right: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 },
-  statusTag: { fontSize: 12, padding: "2px 10px", borderRadius: 10 },
-  statusApproved: { background: "#f0fdf4", color: "#16a34a" },
-  statusPending: { background: "#fef3c7", color: "#b45309" },
+  title: { fontWeight: 600, fontSize: 15, color: "#0f172a" },
+  meta: { fontSize: 13, color: "#71717a", marginTop: 5 },
+  right: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 10 },
+  statusTag: { fontSize: 12, padding: "3px 11px", borderRadius: 20,
+               fontWeight: 500 },
+  statusApproved: { background: "#ecfdf3", color: "#16a34a" },
+  statusPending: { background: "#fffaeb", color: "#b45309" },
   btnRow: { display: "flex", gap: 8, alignItems: "center" },
-  hint: { fontSize: 12, color: "#999" },
+  hint: { fontSize: 12, color: "#9ca3af" },
   btn: {
-    padding: "6px 14px", borderRadius: 6, fontSize: 13,
-    border: "1px solid #d1d5db", background: "#fff", cursor: "pointer",
+    padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500,
+    border: "1px solid #dcdfe4", background: "#fff", cursor: "pointer",
+    color: "#3f3f46",
   },
   btnDanger: {
-    padding: "6px 14px", borderRadius: 6, fontSize: 13,
-    border: "1px solid #dc2626", color: "#dc2626",
+    padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500,
+    border: "1px solid #f0b4b4", color: "#dc2626",
     background: "#fff", cursor: "pointer",
+  },
+  btnPrimary: {
+    padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+    border: "none", background: "#2563eb", color: "#fff",
+    cursor: "pointer", boxShadow: "0 2px 6px rgba(37, 99, 235, 0.25)",
   },
 };
