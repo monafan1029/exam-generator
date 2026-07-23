@@ -117,6 +117,7 @@ CREATE TABLE exam_papers (
     pdf_path        VARCHAR(500),
     export_path     VARCHAR(500),
     version         INTEGER DEFAULT 1,
+    gen_config      JSONB,          -- 出题配置{config, kp_ids}，用于中断后继续出题
     created_at      TIMESTAMP DEFAULT NOW(),
     approved_at     TIMESTAMP
 );
